@@ -1,0 +1,27 @@
+.{
+    .name = .dekun,
+    .version = "0.0.3",
+
+    .cpython = .{
+        .major = 3,
+        .minor = 13,
+        .patch = 9,
+        .release = "20251031"
+    },
+
+    .dependencies = .{
+        .wcwidth = .{
+            .url = "git+https://github.com/joachimschmidt557/zig-wcwidth.git#8e91a284b0f65b465f9ace4e681c7358a2f5f93f",
+            .hash = "wcwidth-0.1.0-A4Aa6tbnAABifvXfbGm-rbqu7n1yRlVSzhKKFvrjjXIu",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+
+    .minimum_zig_version = "0.15.1",
+    .fingerprint = 0x1aa8c48cffab0c66,
+}
