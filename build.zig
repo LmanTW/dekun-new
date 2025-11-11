@@ -95,7 +95,7 @@ pub fn addInstallStep(b: *std.Build, target: std.Build.ResolvedTarget) !void {
         .target = target,
         .optimize = .ReleaseSafe,
 
-        .strip = true,
+        .strip = false,
         .link_libc = true
     });
 
@@ -211,6 +211,10 @@ pub fn addDependencies(b: *std.Build, module: *std.Build.Module) !void {
 
         else => @panic("Unsupported Platform")
     }
+
+    module.addLibraryPath(.{ .cwd_relative = "/root/.dekun/python/lib" });
+
+    module.linkSystemLibrary("python3.13", .{});
 }
 
 // Bundle the source.

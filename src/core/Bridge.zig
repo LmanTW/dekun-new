@@ -39,7 +39,7 @@ pub fn init(dekun: *Dekun, library_path: []const u8) !Bridge {
     const package_path = try std.fs.path.join(dekun.allocator, &.{dekun.root_path, "packages"});
     defer dekun.allocator.free(package_path);
 
-    const command_string = try std.fmt.allocPrint(dekun.allocator, "import sys; sys.path.insert(0, \"{s}\"); sys.path.insert(0, \"{s}\")", .{source_path, package_path});
+    const command_string = try std.fmt.allocPrint(dekun.allocator, "import sys; sys.path.insert(0, \"{s}\"); sys.path.insert(0, \"{s}\"); print(sys.path)", .{source_path, package_path});
     defer dekun.allocator.free(command_string);
 
     try python.runString(command_string);
