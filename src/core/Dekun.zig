@@ -131,8 +131,8 @@ pub fn deinit(self: *Dekun) void {
     self.allocator.free(self.root_path);
 }
 
-// Ensure everything is alright.
-pub fn ensureEverythingAlright(self: *Dekun, check_packages: ?State.Backend, padding: Console.Block.Padding) !State.Backend {
+// Ensure everything is complete.
+pub fn ensureComplete(self: *Dekun, check_packages: ?State.Backend, padding: Console.Block.Padding) !State.Backend {
     try self.checkRootDirectory(padding);
 
     var root_directory = try std.fs.openDirAbsolute(self.root_path, .{});
@@ -168,6 +168,8 @@ pub fn ensureEverythingAlright(self: *Dekun, check_packages: ?State.Backend, pad
                     .before = !padding.after,
                     .after = padding.after
                 });
+
+                break :result true;
             }
         } else {
             try self.installPython(buinfo.cpython, .{
@@ -201,18 +203,18 @@ pub fn ensureEverythingAlright(self: *Dekun, check_packages: ?State.Backend, pad
     }
 
     const source_updated = result: {
-        if (builtin.mode == .Debug) {
-            try self.installSource(.{
-                .before = !padding.after,
-                .after = padding.after
-            });
-        } else if (!std.mem.eql(u8, state.value.dekun_version, buinfo.version)) {
+        if (!std.mem.eql(u8, state.value.dekun_version, buinfo.version)) {
             try self.installSource(.{
                 .before = !padding.after,
                 .after = padding.after
             });
 
             break :result true;
+        } else if (builtin.mode == .Debug) {
+            try self.installSource(.{
+                .before = !padding.after,
+                .after = padding.after
+            });
         }
 
         break :result false;
@@ -250,13 +252,13 @@ pub fn ensureEverythingAlright(self: *Dekun, check_packages: ?State.Backend, pad
 
                 std.process.exit(1);
             } else if (backend == state.value.backend and !source_updated) {
-                  try self.console.block(.success, .{
-                      .title = try Console.String.initFromFormatted(self.console, "Already using the backend: {s}", .{backend.format()}),
-                      .description = try Console.String.initFromBuffer(self.console, "Nothing is changed because the specified backend is already installed."),
+                try self.console.block(.success, .{
+                    .title = try Console.String.initFromFormatted(self.console, "Already using the backend: {s}", .{backend.format()}),
+                    .description = try Console.String.initFromBuffer(self.console, "Nothing is changed because the specified backend is already installed."),
 
-                      .new_line_before = !padding.after,
-                      .new_line_after = padding.after
-                  });
+                    .new_line_before = !padding.after,
+                    .new_line_after = padding.after
+                });
             } else {
                 try self.installPackages(backend, .{
                     .before = !padding.after,
@@ -419,9 +421,17 @@ pub fn checkRootDirectory(self: *Dekun, padding: Console.Block.Padding) !void {
 
 // Install Python.
 pub fn installPython(self: *Dekun, version: @TypeOf(buinfo.cpython), padding: Console.Block.Padding) !void {
+    const platform = switch (builtin.os.tag) {
+        .linux => "Linux",
+        .macos => "macOS",
+        .windows => "Windows",
+
+        else => @panic("Unsupported Platform")
+    };
+
     try self.console.block(.prepare, .{
         .title = try Console.String.initFromBuffer(self.console, "Installing Python..."),
-        .description = try Console.String.initFromFormatted(self.console, "Version: {}.{}.{}", .{version.major, version.minor, version.patch}),
+        .description = try Console.String.initFromFormatted(self.console, "Version: CPython {}.{}.{} ({s} {s})", .{version.major, version.minor, version.patch, @tagName(builtin.cpu.arch), platform}),
 
         .new_line_before = padding.before,
         .new_line_after = padding.after
@@ -562,8 +572,8 @@ pub fn installPython(self: *Dekun, version: @TypeOf(buinfo.cpython), padding: Co
 
         std.tar.pipeToFileSystem(python_directory, &decompress_reader.reader, .{
             .strip_components = 1
-        }) catch {
-            break :result try Console.String.initFromBuffer(self.console, "Failed to extract the archive.");
+        }) catch |exception| {
+            break :result try Console.String.initFromFormatted(self.console, "Failed to extract the archive: {s}", .{@errorName(exception)});
         };
 
         const source_path = try std.fs.path.join(self.allocator, &.{self.root_path, "source"});
@@ -715,43 +725,7 @@ pub fn installPackages(self: *Dekun, backend: State.Backend, padding: Console.Bl
         });
 
         std.process.exit(1);
-    }
-
-    const packages: []const []const u8 = switch (backend) {
-        .cpu => &.{
-            "torch==2.9.0+cpu",
-            "torchvision==0.24.0+cpu",
-            "numpy==2.3.3"
-        },
-
-        .xpu => &.{
-            "torch==2.9.0+xpu",
-            "torchvision==0.24.0+xpu",
-            "numpy==2.3.3"
-        },
-
-        .cuda => &.{
-            "torch==2.9.0+cu128",
-            "torchvision==0.24.0+cu128",
-            "numpy==2.3.3"
-        },
-
-        .rocm => &.{
-            "torch==2.9.0+rocm6.4",
-            "torchvision==0.24.0+rocm6.4",
-            "numpy==2.3.3"
-        },
-
-        .none => @panic("No Backend Selected"),
-    };
-
-    const index_url = switch (backend) {
-        .cpu => "https://download.pytorch.org/whl/cpu",
-        .xpu => "https://download.pytorch.org/whl/xpu",
-        .cuda => "https://download.pytorch.org/whl/cu128",
-        .rocm => "https://download.pytorch.org/whl/rocm6.4",
-        .none => @panic("No Backend Selected")
-    };
+    } 
 
     const package_path = try std.fs.path.join(self.allocator, &.{self.root_path, "packages"});
     defer self.allocator.free(package_path);
@@ -798,6 +772,42 @@ pub fn installPackages(self: *Dekun, backend: State.Backend, padding: Console.Bl
         std.process.exit(1);
     }
 
+    const packages: []const []const u8 = switch (backend) {
+        .cpu => &.{
+            "torch==2.9.0+cpu",
+            "torchvision==0.24.0+cpu",
+            "numpy==2.3.3"
+        },
+
+        .xpu => &.{
+            "torch==2.9.0+xpu",
+            "torchvision==0.24.0+xpu",
+            "numpy==2.3.3"
+        },
+
+        .cuda => &.{
+            "torch==2.9.0+cu128",
+            "torchvision==0.24.0+cu128",
+            "numpy==2.3.3"
+        },
+
+        .rocm => &.{
+            "torch==2.9.0+rocm6.4",
+            "torchvision==0.24.0+rocm6.4",
+            "numpy==2.3.3"
+        },
+
+        .none => @panic("No Backend Selected"),
+    };
+
+    const index_url = switch (backend) {
+        .cpu => "https://download.pytorch.org/whl/cpu",
+        .xpu => "https://download.pytorch.org/whl/xpu",
+        .cuda => "https://download.pytorch.org/whl/cu128",
+        .rocm => "https://download.pytorch.org/whl/rocm6.4",
+        .none => @panic("No Backend Selected")
+    };
+
     const joined_packages = try std.mem.join(self.allocator, ", ", packages);
     defer self.allocator.free(joined_packages);
 
@@ -814,13 +824,13 @@ pub fn installPackages(self: *Dekun, backend: State.Backend, padding: Console.Bl
 
     for (packages, 0..) |package, index| {
         const arguments: []const []const u8 = switch (builtin.os.tag) {
-            .linux, .macos => &.{"./bin/python", "-m", "pip", "install", package, "--target", package_path, "--index-url", index_url},
-            .windows => &.{"./python.exe", "-m", "pip", "install", package, "--target", package_path, "--index-url", index_url},
+            .linux, .macos => &.{"./bin/python", "-m", "pip", "install", package, "--disable-pip-version-check", "--target",  package_path, "--index-url", index_url},
+            .windows => &.{"./python.exe", "-m", "pip", "install", package, "--disable-pip-version-check", "--target", package_path, "--index-url", index_url},
 
             else => @panic("Unsupported Platform")
         };
 
-        var environment = std.process.EnvMap.init(self.allocator);
+        var environment = try std.process.getEnvMap(self.allocator);
         defer environment.deinit();
 
         try environment.put("PYTHONHOME", python_path);
@@ -834,8 +844,8 @@ pub fn installPackages(self: *Dekun, backend: State.Backend, padding: Console.Bl
         child.stderr_behavior = .Pipe; 
 
         child.spawn() catch |exception| {
-            try self.console.block(.progress, .{
-                .title = try Console.String.initFromFormatted(self.console, "Failed to spawn Pip: {s}", .{@errorName(exception)}),
+            try self.console.block(.failed, .{
+                .title = try Console.String.initFromFormatted(self.console, "Failed to run Pip: {s}", .{@errorName(exception)}),
                 .description = try Console.String.initFromBuffer(self.console, "Please try deleting the root directory and try again."),
 
                 .new_line_before = !padding.after,
@@ -860,7 +870,17 @@ pub fn installPackages(self: *Dekun, backend: State.Backend, padding: Console.Bl
 
         try child.collectOutput(self.allocator, &stdout, &stderr, std.math.maxInt(usize));
 
-        const result = try child.wait();
+        const result = child.wait() catch |exception| {
+            try self.console.block(.failed, .{
+                .title = try Console.String.initFromFormatted(self.console, "Failed to run Pip: {s}", .{@errorName(exception)}),
+                .description = try Console.String.initFromBuffer(self.console, "Please try deleting the root directory and try again."),
+
+                .new_line_before = !padding.after,
+                .new_line_after = true
+            });
+
+            std.process.exit(1);
+        };
 
         switch (result) {
             .Exited => |status_code| {
@@ -886,19 +906,19 @@ pub fn installPackages(self: *Dekun, backend: State.Backend, padding: Console.Bl
 pub fn loadPythonBridge(self: *Dekun, padding: Console.Block.Padding) !Bridge {
     try self.console.block(.prepare, .{
         .title = try Console.String.initFromBuffer(self.console, "Loading the Python runtime..."),
-        .description = try Console.String.initFromFormatted(self.console, "Python: {}.{}.{}", .{buinfo.cpython.major, buinfo.cpython.minor, buinfo.cpython.patch}),
+        .description = try Console.String.initFromFormatted(self.console, "CPython: {}.{}.{}", .{buinfo.cpython.major, buinfo.cpython.minor, buinfo.cpython.patch}),
 
         .new_line_before = padding.before,
         .new_line_after = padding.after
     });
-    
+
     const library_path = result: {
         switch (builtin.os.tag) {
             .linux => {
-                const name = try std.fmt.allocPrint(self.allocator, "libpython{}.{}.so", .{buinfo.cpython.major, buinfo.cpython.minor});
+                const name = try std.fmt.allocPrint(self.allocator, "libpython{}.{}d.so.1.0", .{buinfo.cpython.major, buinfo.cpython.minor});
                 defer self.allocator.free(name);
 
-                break :result try std.fs.path.join(self.allocator, &.{self.root_path, "python", "lib", name});
+                break :result try std.fs.path.join(self.allocator, &.{self.root_path, "python-debug", "lib", name});
             },
 
             .macos => {
@@ -952,7 +972,7 @@ fn root_command_callback(self: *Dekun, command: *Console.Command(Dekun), parsed:
 // The callback for the use command.
 fn use_command_callback(self: *Dekun, _: *Console.Command(Dekun), parsed: *Console.ParsedArguments) !void {
     if (State.Backend.parseSlice(parsed.getPositional(0) orelse unreachable)) |backend| {
-        _ = try self.ensureEverythingAlright(backend, .{
+        _ = try self.ensureComplete(backend, .{
             .before = true,
             .after = true
         });
@@ -1037,7 +1057,7 @@ pub const Marker = struct {
 
     // The callback for the init command.
     fn init_command_callback(self: *Dekun,  _: *Console.Command(Dekun), parsed: *Console.ParsedArguments) !void {
-        const backend = try self.ensureEverythingAlright(null, .{
+        const backend = try self.ensureComplete(null, .{
             .before = true,
             .after = true
         });

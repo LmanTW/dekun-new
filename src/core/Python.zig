@@ -39,15 +39,12 @@ binding: struct {
     PyUnicode_FromString: *const @TypeOf(c.PyUnicode_FromString),
     PyUnicode_AsUTF8AndSize: *const @TypeOf(c.PyUnicode_AsUTF8AndSize),
     PyTuple_New: *const @TypeOf(c.PyTuple_New),
-    PyTuple_Size: *const @TypeOf(c.PyTuple_Size),
     PyTuple_GetItem: *const @TypeOf(c.PyTuple_GetItem),
     PyTuple_SetItem: *const @TypeOf(c.PyTuple_SetItem),
     PyErr_Clear: *const @TypeOf(c.PyErr_Clear),
     PyErr_Occurred: *const @TypeOf(c.PyErr_Occurred),
     PyRun_SimpleString: *const @TypeOf(c.PyRun_SimpleString),
-    PyRun_SimpleFile: *const @TypeOf(c.PyRun_SimpleFile),
-    PyImport_ImportModule: *const @TypeOf(c.PyImport_ImportModule),
-    PyImport_AddModuleRef: *const @TypeOf(c.PyImport_AddModuleRef)
+    PyImport_ImportModule: *const @TypeOf(c.PyImport_ImportModule)
 },
 
 // A config.
@@ -63,7 +60,6 @@ pub const Config = struct {
 
         return .{
             .python = python,
-            .allocator = python.allocator,
             .internal = internal
         };
     }
@@ -91,7 +87,14 @@ pub const Config = struct {
         const string_buffer = try self.python.allocator.dupeZ(u8, string);
         defer self.python.allocator.free(string_buffer);
 
-        _ = self.python.binding.PyConfig_SetBytesString(self.internal, field, string_buffer);
+        const status = Status{
+            .python = self.python,
+            .internal = self.python.binding.PyConfig_SetBytesString(self.internal, field, string_buffer)
+        };
+
+        if (status.isError()) {
+            return error.SetStringFailed;
+        }
     }
 };
 
@@ -231,17 +234,6 @@ pub const Object = struct {
         return error.GetDictionaryitemFailed;
     }
 
-    // Get the length of the tuple.
-    pub fn getTupleLength(self: Object) usize {
-        const result = self.python.binding.PyTuple_Size(self.internal);
-
-        if (result == -1) {
-            return error.GetLengthFailed;
-        }
-
-        return @intCast(result);
-    }
-
     // Get an item in the tuple.
     pub fn getTupleItem(self: Object, index: usize) !Object {
         if (self.python.binding.PyTuple_GetItem(self.internal, @intCast(index))) |object| {
@@ -259,7 +251,9 @@ pub const Object = struct {
     }
 
     // Call the object.
-    pub fn callObject(self: Object, arguments: ?Object) !Object {
+    pub fn callObject(self: Object, arguments: ?Object) !Object { 
+        std.debug.print("{x}\n", .{@intFromPtr(self.python.binding.PyObject_CallObject)});
+
         if (self.python.binding.PyObject_CallObject(self.internal, if (arguments) |object| object.internal else null)) |object| {
             return Object.init(self.python, object);
         }
@@ -269,10 +263,10 @@ pub const Object = struct {
 };
 
 // Load a dynamic Python library.
-pub fn load(path: []const u8, allocator: std.mem.Allocator) !Python {
+pub fn load(path: []const u8, allocator: std.mem.Allocator) !Python { 
     switch (builtin.os.tag) {
         .linux, .macos => {
-            const handle = std.c.dlopen(&try std.posix.toPosixPath(path), .{ .LAZY = true, .GLOBAL = true }) orelse return error.FileNotFound;
+            const handle = std.c.dlopen(&try std.posix.toPosixPath(path), .{ .NOW = true }) orelse return error.FileNotFound;
             errdefer _ = std.c.dlclose(handle);
 
             return .{
@@ -280,45 +274,42 @@ pub fn load(path: []const u8, allocator: std.mem.Allocator) !Python {
                 .handle = handle,
 
                 .binding = .{
-                    .Py_Initialize = @ptrCast(std.c.dlsym(handle, "Py_Initialize") orelse return error.SymbolNotFound),
-                    .Py_InitializeFromConfig = @ptrCast(std.c.dlsym(handle, "Py_InitializeFromConfig") orelse return error.SymbolNotFound),
-                    .Py_IncRef = @ptrCast(std.c.dlsym(handle, "Py_IncRef") orelse return error.SymbolNotFound),
-                    .Py_DecRef = @ptrCast(std.c.dlsym(handle, "Py_DecRef") orelse return error.SymbolNotFound),
-                    .Py_Finalize = @ptrCast(std.c.dlsym(handle, "Py_Finalize") orelse return error.SymbolNotFound),
-                    .PyConfig_InitPythonConfig = @ptrCast(std.c.dlsym(handle, "PyConfig_InitPythonConfig") orelse return error.SymbolNotFound),
-                    .PyConfig_InitIsolatedConfig = @ptrCast(std.c.dlsym(handle, "PyConfig_InitIsolatedConfig") orelse return error.SymbolNotFound),
-                    .PyConfig_Clear = @ptrCast(std.c.dlsym(handle, "PyConfig_Clear") orelse return error.SymbolNotFound),
-                    .PyConfig_SetBytesString = @ptrCast(std.c.dlsym(handle, "PyConfig_SetBytesString") orelse return error.SymbolNotFound),
-                    .PyStatus_IsExit = @ptrCast(std.c.dlsym(handle, "PyStatus_IsExit") orelse return error.SymbolNotFound),
-                    .PyStatus_IsError = @ptrCast(std.c.dlsym(handle, "PyStatus_IsError") orelse return error.SymbolNotFound),
-                    .PyModule_GetDict = @ptrCast(std.c.dlsym(handle, "PyModule_GetDict") orelse return error.SymbolNotFound),
-                    .PyDict_GetItemString = @ptrCast(std.c.dlsym(handle, "PyDict_GetItemString") orelse return error.SymbolNotFound),
-                    .PyObject_CallObject = @ptrCast(std.c.dlsym(handle, "PyObject_CallObject") orelse return error.SymbolNotFound),
-                    .PyLong_FromLong = @ptrCast(std.c.dlsym(handle, "PyLong_FromLong") orelse return error.SymbolNotFound),
-                    .PyLong_AsLong = @ptrCast(std.c.dlsym(handle, "PyLong_AsLong") orelse return error.SymbolNotFound),
-                    .PyFloat_FromDouble = @ptrCast(std.c.dlsym(handle, "PyFloat_FromDouble") orelse return error.SymbolNotFound),
-                    .PyFloat_AsDouble = @ptrCast(std.c.dlsym(handle, "PyFloat_AsDouble") orelse return error.SymbolNotFound),
-                    .PyUnicode_FromString = @ptrCast(std.c.dlsym(handle, "PyUnicode_FromString") orelse return error.SymbolNotFound),
-                    .PyUnicode_AsUTF8AndSize = @ptrCast(std.c.dlsym(handle, "PyUnicode_AsUTF8AndSize") orelse return error.SymbolNotFound),
-                    .PyTuple_New = @ptrCast(std.c.dlsym(handle, "PyTuple_New") orelse return error.SymbolNotFound),
-                    .PyTuple_Size = @ptrCast(std.c.dlsym(handle, "PyTuple_Size") orelse return error.SymbolNotFound),
-                    .PyTuple_GetItem = @ptrCast(std.c.dlsym(handle, "PyTuple_GetItem") orelse return error.SymbolNotFound),
-                    .PyTuple_SetItem = @ptrCast(std.c.dlsym(handle, "PyTuple_SetItem") orelse return error.SymbolNotFound),
-                    .PyErr_Clear = @ptrCast(std.c.dlsym(handle, "PyErr_Clear") orelse return error.SymbolNotFound),
-                    .PyErr_Occurred = @ptrCast(std.c.dlsym(handle, "PyErr_Occurred") orelse return error.SymbolNotFound),
-                    .PyRun_SimpleString = @ptrCast(std.c.dlsym(handle, "PyRun_SimpleString") orelse return error.SymbolNotFound),
-                    .PyRun_SimpleFile = @ptrCast(std.c.dlsym(handle, "PyRun_SimpleFile") orelse return error.SymbolNotFound),
-                    .PyImport_ImportModule = @ptrCast(std.c.dlsym(handle, "PyImport_ImportModule") orelse return error.SymbolNotFound),
-                    .PyImport_AddModuleRef = @ptrCast(std.c.dlsym(handle, "PyImport_AddModuleRef") orelse return error.SymbolNotFound)
+                    .Py_Initialize = @ptrCast(@alignCast(std.c.dlsym(handle, "Py_Initialize") orelse return error.SymbolNotFound)),
+                    .Py_InitializeFromConfig = @ptrCast(@alignCast(std.c.dlsym(handle, "Py_InitializeFromConfig") orelse return error.SymbolNotFound)),
+                    .Py_IncRef = @ptrCast(@alignCast(std.c.dlsym(handle, "Py_IncRef") orelse return error.SymbolNotFound)),
+                    .Py_DecRef = @ptrCast(@alignCast(std.c.dlsym(handle, "Py_DecRef") orelse return error.SymbolNotFound)),
+                    .Py_Finalize = @ptrCast(@alignCast(std.c.dlsym(handle, "Py_Finalize") orelse return error.SymbolNotFound)),
+                    .PyConfig_InitPythonConfig = @ptrCast(@alignCast(std.c.dlsym(handle, "PyConfig_InitPythonConfig") orelse return error.SymbolNotFound)),
+                    .PyConfig_InitIsolatedConfig = @ptrCast(@alignCast(std.c.dlsym(handle, "PyConfig_InitIsolatedConfig") orelse return error.SymbolNotFound)),
+                    .PyConfig_Clear = @ptrCast(@alignCast(std.c.dlsym(handle, "PyConfig_Clear") orelse return error.SymbolNotFound)),
+                    .PyConfig_SetBytesString = @ptrCast(@alignCast(std.c.dlsym(handle, "PyConfig_SetBytesString") orelse return error.SymbolNotFound)),
+                    .PyStatus_IsExit = @ptrCast(@alignCast(std.c.dlsym(handle, "PyStatus_IsExit") orelse return error.SymbolNotFound)),
+                    .PyStatus_IsError = @ptrCast(@alignCast(std.c.dlsym(handle, "PyStatus_IsError") orelse return error.SymbolNotFound)),
+                    .PyModule_GetDict = @ptrCast(@alignCast(std.c.dlsym(handle, "PyModule_GetDict") orelse return error.SymbolNotFound)),
+                    .PyDict_GetItemString = @ptrCast(@alignCast(std.c.dlsym(handle, "PyDict_GetItemString") orelse return error.SymbolNotFound)),
+                    .PyObject_CallObject = @ptrCast(@alignCast(std.c.dlsym(handle, "PyObject_CallObject") orelse return error.SymbolNotFound)),
+                    .PyLong_FromLong = @ptrCast(@alignCast(std.c.dlsym(handle, "PyLong_FromLong") orelse return error.SymbolNotFound)),
+                    .PyLong_AsLong = @ptrCast(@alignCast(std.c.dlsym(handle, "PyLong_AsLong") orelse return error.SymbolNotFound)),
+                    .PyFloat_FromDouble = @ptrCast(@alignCast(std.c.dlsym(handle, "PyFloat_FromDouble") orelse return error.SymbolNotFound)),
+                    .PyFloat_AsDouble = @ptrCast(@alignCast(std.c.dlsym(handle, "PyFloat_AsDouble") orelse return error.SymbolNotFound)),
+                    .PyUnicode_FromString = @ptrCast(@alignCast(std.c.dlsym(handle, "PyUnicode_FromString") orelse return error.SymbolNotFound)),
+                    .PyUnicode_AsUTF8AndSize = @ptrCast(@alignCast(std.c.dlsym(handle, "PyUnicode_AsUTF8AndSize") orelse return error.SymbolNotFound)),
+                    .PyTuple_New = @ptrCast(@alignCast(std.c.dlsym(handle, "PyTuple_New") orelse return error.SymbolNotFound)),
+                    .PyTuple_GetItem = @ptrCast(@alignCast(std.c.dlsym(handle, "PyTuple_GetItem") orelse return error.SymbolNotFound)),
+                    .PyTuple_SetItem = @ptrCast(@alignCast(std.c.dlsym(handle, "PyTuple_SetItem") orelse return error.SymbolNotFound)),
+                    .PyErr_Clear = @ptrCast(@alignCast(std.c.dlsym(handle, "PyErr_Clear") orelse return error.SymbolNotFound)),
+                    .PyErr_Occurred = @ptrCast(@alignCast(std.c.dlsym(handle, "PyErr_Occurred") orelse return error.SymbolNotFound)),
+                    .PyRun_SimpleString = @ptrCast(@alignCast(std.c.dlsym(handle, "PyRun_SimpleString") orelse return error.SymbolNotFound)),
+                    .PyImport_ImportModule = @ptrCast(@alignCast(std.c.dlsym(handle, "PyImport_ImportModule") orelse return error.SymbolNotFound))
                 }
             };
         },
 
         .windows => {
-            const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
-            defer allocator.free(wide_path);
+            const wide_path = (try std.os.windows.sliceToPrefixedFileW(null, path)).span().ptr;
+            const offset: usize = if (wide_path[0] == '\\' and wide_path[1] == '?' and wide_path[2] == '?' and wide_path[3] == '\\') 4 else 0;
 
-            const handle = try std.os.windows.LoadLibraryW(wide_path);
+            const handle = try std.os.windows.LoadLibraryExW(wide_path + offset, .load_with_altered_search_path);
             errdefer std.os.windows.FreeLibrary(handle);
             
             return .{
@@ -326,36 +317,33 @@ pub fn load(path: []const u8, allocator: std.mem.Allocator) !Python {
                 .handle = handle,
 
                 .binding = .{
-                    .Py_Initialize = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_Initialize") orelse return error.SymbolNotFound),
-                    .Py_InitializeFromConfig = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_InitializeFromConfig") orelse return error.SymbolNotFound),
-                    .Py_IncRef = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_IncRef") orelse return error.SymbolNotFound),
-                    .Py_DecRef = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_DecRef") orelse return error.SymbolNotFound),
-                    .Py_Finalize = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_Finalize") orelse return error.SymbolNotFound),
-                    .PyConfig_InitPythonConfig = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyConfig_InitPythonConfig") orelse return error.SymbolNotFound),
-                    .PyConfig_InitIsolatedConfig = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyConfig_InitIsolatedConfig") orelse return error.SymbolNotFound),
-                    .PyConfig_Clear = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyConfig_Clear") orelse return error.SymbolNotFound),
-                    .PyConfig_SetBytesString = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyConfig_SetBytesString") orelse return error.SymbolNotFound),
-                    .PyStatus_IsExit = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyStatus_IsExit") orelse return error.SymbolNotFound),
-                    .PyStatus_IsError = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyStatus_IsError") orelse return error.SymbolNotFound),
-                    .PyModule_GetDict = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyModule_GetDict") orelse return error.SymbolNotFound),
-                    .PyDict_GetItemString = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyDict_GetItemString") orelse return error.SymbolNotFound),
-                    .PyObject_CallObject = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyObject_CallObject") orelse return error.SymbolNotFound),
-                    .PyLong_FromLong = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyLong_FromLong") orelse return error.SymbolNotFound),
-                    .PyLong_AsLong = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyLong_AsLong") orelse return error.SymbolNotFound),
-                    .PyFloat_FromDouble = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyFloat_FromDouble") orelse return error.SymbolNotFound),
-                    .PyFloat_AsDouble = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyFloat_AsDouble") orelse return error.SymbolNotFound),
-                    .PyUnicode_FromString = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyUnicode_FromString") orelse return error.SymbolNotFound),
-                    .PyUnicode_AsUTF8AndSize = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyUnicode_AsUTF8AndSize") orelse return error.SymbolNotFound),
-                    .PyTuple_New = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyTuple_New") orelse return error.SymbolNotFound),
-                    .PyTuple_Size = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyTuple_Size") orelse return error.SymbolNotFound),
-                    .PyTuple_GetItem = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyTuple_GetItem") orelse return error.SymbolNotFound),
-                    .PyTuple_SetItem = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyTuple_SetItem") orelse return error.SymbolNotFound),
-                    .PyErr_Clear = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyErr_Clear") orelse return error.SymbolNotFound),
-                    .PyErr_Occurred = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyErr_Occurred") orelse return error.SymbolNotFound),
-                    .PyRun_SimpleString = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyRun_SimpleString") orelse return error.SymbolNotFound),
-                    .PyRun_SimpleFile = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyRun_SimpleFile") orelse return error.SymbolNotFound),
-                    .PyImport_ImportModule = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyImport_ImportModule") orelse return error.SymbolNotFound),
-                    .PyImport_AddModuleRef = @ptrCast(std.os.windows.kernel32.GetProcAddress(handle, "PyImport_AddModuleRef") orelse return error.SymbolNotFound)
+                    .Py_Initialize = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_Initialize") orelse return error.SymbolNotFound)),
+                    .Py_InitializeFromConfig = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_InitializeFromConfig") orelse return error.SymbolNotFound)),
+                    .Py_IncRef = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_IncRef") orelse return error.SymbolNotFound)),
+                    .Py_DecRef = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_DecRef") orelse return error.SymbolNotFound)),
+                    .Py_Finalize = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "Py_Finalize") orelse return error.SymbolNotFound)),
+                    .PyConfig_InitPythonConfig = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyConfig_InitPythonConfig") orelse return error.SymbolNotFound)),
+                    .PyConfig_InitIsolatedConfig = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyConfig_InitIsolatedConfig") orelse return error.SymbolNotFound)),
+                    .PyConfig_Clear = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyConfig_Clear") orelse return error.SymbolNotFound)),
+                    .PyConfig_SetBytesString = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyConfig_SetBytesString") orelse return error.SymbolNotFound)),
+                    .PyStatus_IsExit = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyStatus_IsExit") orelse return error.SymbolNotFound)),
+                    .PyStatus_IsError = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyStatus_IsError") orelse return error.SymbolNotFound)),
+                    .PyModule_GetDict = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyModule_GetDict") orelse return error.SymbolNotFound)),
+                    .PyDict_GetItemString = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyDict_GetItemString") orelse return error.SymbolNotFound)),
+                    .PyObject_CallObject = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyObject_CallObject") orelse return error.SymbolNotFound)),
+                    .PyLong_FromLong = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyLong_FromLong") orelse return error.SymbolNotFound)),
+                    .PyLong_AsLong = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyLong_AsLong") orelse return error.SymbolNotFound)),
+                    .PyFloat_FromDouble = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyFloat_FromDouble") orelse return error.SymbolNotFound)),
+                    .PyFloat_AsDouble = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyFloat_AsDouble") orelse return error.SymbolNotFound)),
+                    .PyUnicode_FromString = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyUnicode_FromString") orelse return error.SymbolNotFound)),
+                    .PyUnicode_AsUTF8AndSize = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyUnicode_AsUTF8AndSize") orelse return error.SymbolNotFound)),
+                    .PyTuple_New = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyTuple_New") orelse return error.SymbolNotFound)),
+                    .PyTuple_GetItem = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyTuple_GetItem") orelse return error.SymbolNotFound)),
+                    .PyTuple_SetItem = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyTuple_SetItem") orelse return error.SymbolNotFound)),
+                    .PyErr_Clear = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyErr_Clear") orelse return error.SymbolNotFound)),
+                    .PyErr_Occurred = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyErr_Occurred") orelse return error.SymbolNotFound)),
+                    .PyRun_SimpleString = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyRun_SimpleString") orelse return error.SymbolNotFound)),
+                    .PyImport_ImportModule = @ptrCast(@alignCast(std.os.windows.kernel32.GetProcAddress(handle, "PyImport_ImportModule") orelse return error.SymbolNotFound))
                 }
             };
         },
@@ -383,14 +371,7 @@ pub fn unload(self: *Python) void {
 
 // Initialize the Python interpreter.
 pub fn init(self: *Python) !void {
-    const status = Status{
-        .python = self,
-        .internal = self.binding.Py_Initialize()
-    };
-
-    if (status.isError()) {
-        return error.InitializationFailed;
-    }
+    self.binding.Py_Initialize();
 }
 
 // Initialize the Python interpreter from a config.
@@ -419,29 +400,6 @@ pub fn runString(self: *Python, string: []const u8) !void {
 
     if (self.binding.PyRun_SimpleString(string_buffer) == -1) {
         return error.RunFailed;
-    }
-}
-
-// Run a file.
-pub fn runFile(self: *Python, file: std.fs.File, filename: []const u8) !void {
-    switch (builtin.os.tag) {
-        .linux, .macos => {
-            const handle = c.fdopen(file.handle, "r") orelse return error.FailedToOpenFile;
-
-            _ = self.binding.PyRun_SimpleFile(handle, &try utilities.toNullTerminated(u8, 64, filename));
-        },
-
-        .windows => {
-            const handle = c._open_osfhandle(@intCast(@intFromPtr(file.handle)), 0x0000);
-
-            if (handle == -1) {
-                return error.OpenFailed;
-            }
-
-            _ = self.binding.PyRun_SimpleFile(handle, &try utilities.toNullTerminated(u8, 64, filename));
-        },
-
-        else => @panic("Unsupported Platform")
     }
 }
 
