@@ -915,7 +915,7 @@ pub fn loadPythonBridge(self: *Dekun, padding: Console.Block.Padding) !Bridge {
     const library_path = result: {
         switch (builtin.os.tag) {
             .linux => {
-                const name = try std.fmt.allocPrint(self.allocator, "libpython{}.{}d.so.1.0", .{buinfo.cpython.major, buinfo.cpython.minor});
+                const name = try std.fmt.allocPrint(self.allocator, "libpython{}.{}.so.1.0", .{buinfo.cpython.major, buinfo.cpython.minor});
                 defer self.allocator.free(name);
 
                 break :result try std.fs.path.join(self.allocator, &.{self.root_path, "python-debug", "lib", name});
